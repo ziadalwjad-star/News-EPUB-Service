@@ -2,10 +2,10 @@
 # they default to work/ and outbox/ beneath NEWS_EPUB_ROOT.
 NEWS_EPUB_ROOT=/var/lib/news-epub
 NEWS_EPUB_RECIPE=/opt/news-epub/news-epub.recipe
-# Calibre can occasionally preserve a safe raster payload under a mismatched
-# raster media-type/extension. The compatibility validator warns on that case
-# but still rejects unrecognised bytes, active content and remote resources.
-NEWS_EPUB_VALIDATOR=/usr/local/bin/news-epub-validate-calibre
+# The canonical validator warns (without failing publication) when a recognised
+# safe raster payload has a mismatched raster declaration, while unrecognised
+# image bytes, active content and remote resources remain hard failures.
+NEWS_EPUB_VALIDATOR=/usr/local/bin/news-epub-validate
 NEWS_EPUB_EBOOK_CONVERT=ebook-convert
 NEWS_EPUB_EPUBCHECK=
 
