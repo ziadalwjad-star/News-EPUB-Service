@@ -104,10 +104,12 @@ It rejects, among other things:
 - scripts, forms, iframes, embedded active objects, event handlers, `xml:base` and meta refresh
 - remote publication resources, remote CSS resources/imports and unsafe hyperlink schemes
 - active or remote-resource SVG content
-- common image media-type/signature mismatches
+- unrecognisable common raster image bytes; recognised safe raster payloads with a mismatched raster declaration are accepted with an explicit warning
 - EPUBs or individual archive members above configured size ceilings
 
 Normal `http`, `https`, `mailto` and `tel` hyperlinks remain usable because following them is a reader action; resources required to render the issue must be local.
+
+For GIF, JPEG, PNG and WebP resources, the validator identifies the actual payload signature. A recognised raster payload with a mismatched declaration is logged and counted as `raster_media_type_warnings`; arbitrary or unrecognisable bytes remain a hard failure.
 
 When EPUBCheck is absent and not required, the build logs a warning on every successful project-level validation. Set `NEWS_EPUB_REQUIRE_EPUBCHECK=1` for strict unattended deployment.
 
