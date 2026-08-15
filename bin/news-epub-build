@@ -60,7 +60,8 @@ esac
 [ -r "$recipe" ] || fail 66 "Recipe not readable: $recipe"
 command -v ebook-convert >/dev/null 2>&1 || fail 69 "ebook-convert is not installed or not on PATH"
 command -v flock >/dev/null 2>&1 || fail 69 "flock is not installed or not on PATH"
-[ -x "$validator" ] || fail 69 "EPUB validator is not executable: $validator"
+command -v python3 >/dev/null 2>&1 || fail 69 "python3 is not installed or not on PATH"
+[ -r "$validator" ] || fail 69 "EPUB validator is not readable: $validator"
 
 if [ -n "$epubcheck_command" ]; then
     command -v "$epubcheck_command" >/dev/null 2>&1 || fail 69 "Configured EPUBCheck command is unavailable: $epubcheck_command"
@@ -109,9 +110,9 @@ while [ "$attempt" -le "$max_attempts" ]; do
 
     if [ "$status" -eq 0 ] && [ -s "$temporary" ]; then
         if [ "$epub_version" -eq 3 ]; then
-            "$validator" --require-epub3 "$temporary" || status=$?
+            python3 "$validator" --require-epub3 "$temporary" || status=$?
         else
-            "$validator" "$temporary" || status=$?
+            python3 "$validator" "$temporary" || status=$?
         fi
     elif [ "$status" -eq 0 ]; then
         status=65
