@@ -220,7 +220,7 @@ while [ "$attempt" -le "$max_attempts" ]; do
 done
 
 log info validate "running project EPUB integrity and privacy checks"
-set -- --max-uncompressed-mib "$max_uncompressed_mib" --max-member-mib "$max_member_mib"
+set -- --repair-raster-media-types --max-uncompressed-mib "$max_uncompressed_mib" --max-member-mib "$max_member_mib"
 if [ "$epub_version" -eq 3 ]; then
     set -- "$@" --require-epub3
 fi
