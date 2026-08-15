@@ -1,0 +1,11 @@
+[Unit]
+Description=Build evening News EPUB edition
+
+[Timer]
+OnCalendar=*-*-* 17:30:00
+AccuracySec=1s
+Persistent=true
+Unit=news-epub@evening.service
+
+[Install]
+WantedBy=timers.target

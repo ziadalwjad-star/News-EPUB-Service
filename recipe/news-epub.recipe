@@ -1,0 +1,556 @@
+import os
+import re
+from datetime import datetime
+
+from calibre.ebooks.BeautifulSoup import BeautifulSoup
+from calibre.web.feeds.news import BasicNewsRecipe
+
+
+class NewsEpubRecipe(BasicNewsRecipe):
+    title = os.environ.get("NEWS_EPUB_TITLE", "News Digest").strip() or "News Digest"
+    description = "A curated news digest prepared as an EPUB for scheduled offline reading."
+    language = "en"
+    publication_type = "newspaper"
+    requires_version = (9, 0, 0)
+    timefmt = ""
+    oldest_article = 1
+    max_articles_per_feed = 20
+    remove_empty_feeds = True
+    ignore_duplicate_articles = {"title", "url"}
+    use_embedded_content = None
+    auto_cleanup = True
+    auto_cleanup_keep = "//article//figure|//article//picture|//main//figure|//main//picture"
+    remove_javascript = True
+    no_stylesheets = True
+    remove_attributes = ["style", "font", "onclick", "onload"]
+    recursions = 0
+    simultaneous_downloads = 3
+    timeout = 75
+    browser_type = "qt"
+    handle_gzip = True
+    compress_news_images = True
+    compress_news_images_max_size = 96
+    scale_news_images_to_device = True
+    center_navbar = True
+    conversion_options = {
+        "flow_size": 0,
+        "pretty_print": False,
+        "base_font_size": 16,
+        "linearize_tables": True,
+    }
+    extra_css = """
+body {
+    margin: 0 2.5%;
+    font-family: serif;
+    font-size: 1em;
+    line-height: 1.46;
+    text-align: left;
+}
+h1, h2, h3, h4 {
+    font-family: sans-serif;
+    font-weight: bold;
+    line-height: 1.16;
+    page-break-after: avoid;
+    break-after: avoid;
+}
+h1 {
+    margin: 0.7em 0 0.42em;
+    padding-bottom: 0.28em;
+    border-bottom: 0.12em solid #222;
+    font-size: 1.58em;
+}
+h2 {
+    margin: 0.88em 0 0.36em;
+    padding-left: 0.48em;
+    border-left: 0.24em solid #555;
+    font-size: 1.3em;
+}
+h3 {
+    margin: 0.8em 0 0.3em;
+    font-size: 1.15em;
+}
+h4 {
+    margin: 0.7em 0 0.25em;
+    font-size: 1em;
+}
+p {
+    margin: 0.66em 0;
+    orphans: 3;
+    widows: 3;
+}
+a {
+    color: #111;
+    text-decoration: underline;
+}
+img {
+    display: block;
+    max-width: 98%;
+    height: auto;
+    margin: 0.9em auto 0.45em;
+    page-break-inside: avoid;
+    break-inside: avoid;
+}
+.calibre-nuked-tag-figure, figure {
+    margin: 0.9em 0;
+    page-break-inside: avoid;
+    break-inside: avoid;
+}
+.calibre-nuked-tag-figcaption, figcaption {
+    margin: 0.15em 0 0.9em;
+    font-family: sans-serif;
+    font-size: 0.8em;
+    line-height: 1.3;
+    color: #444;
+    text-align: center;
+}
+blockquote {
+    margin: 0.8em 0.4em;
+    padding: 0.1em 0.8em;
+    border-left: 0.22em solid #777;
+    font-style: italic;
+}
+ul, ol {
+    margin: 0.6em 0;
+    padding-left: 1.45em;
+}
+li {
+    margin: 0.25em 0;
+}
+table {
+    width: 100%;
+    margin: 0.8em 0;
+    border-collapse: collapse;
+    font-size: 0.88em;
+}
+th, td {
+    padding: 0.34em;
+    border: 1px solid #888;
+    vertical-align: top;
+}
+th {
+    font-family: sans-serif;
+    font-weight: bold;
+}
+pre, code {
+    font-family: monospace;
+    font-size: 0.88em;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+hr {
+    margin: 1.1em 0;
+    border: 0;
+    border-top: 1px solid #777;
+}
+.calibre_navbar {
+    margin: 0 0 1em;
+    padding: 0.56em 0.25em 0.52em;
+    border: 0;
+    border-bottom: 0.12em solid #777;
+    font-family: sans-serif;
+    font-size: 0.8em;
+    font-weight: bold;
+    line-height: 1.5;
+    text-align: center;
+    page-break-after: avoid;
+    break-after: avoid;
+    page-break-inside: avoid;
+    break-inside: avoid;
+}
+.calibre_navbar hr {
+    display: none;
+}
+.calibre_navbar a {
+    text-decoration: none;
+}
+.calibre_feed_list, .calibre_article_list {
+    margin: 0.45em 0;
+    padding-left: 1.25em;
+}
+.calibre_feed_list li {
+    margin: 0;
+    padding: 0.55em 0;
+    border-bottom: 1px solid #bbb;
+    font-family: sans-serif;
+    font-weight: bold;
+    page-break-inside: avoid;
+}
+.calibre_feed_title {
+    margin-top: 0.35em;
+}
+.calibre_article_list li {
+    margin: 0;
+    padding: 0.62em 0;
+    border-bottom: 1px solid #ccc;
+    page-break-inside: avoid;
+}
+.calibre_article_list .article {
+    display: block;
+    font-family: sans-serif;
+    font-weight: bold;
+    line-height: 1.25;
+    text-decoration: none;
+}
+.article_date {
+    display: block;
+    margin-top: 0.18em;
+    font-family: sans-serif;
+    font-size: 0.78em;
+}
+.article_description {
+    margin-top: 0.32em;
+    font-size: 0.88em;
+    line-height: 1.34;
+}
+.calibre_feed_description {
+    margin: 0.35em 0 0.65em;
+    font-size: 0.88em;
+}
+body > div:first-child > p:first-child {
+    margin: 0.2em 0 0.6em;
+}
+"""
+    invalid_xml_characters = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+    feed_groups = [
+        ("World", [
+            ("BBC News", "World", "https://feeds.bbci.co.uk/news/world/rss.xml", 1),
+            ("The Guardian", "World", "https://www.theguardian.com/world/rss", 1),
+            ("MercoPress", "Latin America", "https://en.mercopress.com/rss/latin-america", 3),
+        ]),
+        ("United Kingdom", [
+            ("BBC News", "United Kingdom", "https://feeds.bbci.co.uk/news/uk/rss.xml", 1),
+            ("Sky News", "UK Politics", "https://feeds.skynews.com/feeds/rss/politics.xml", 1),
+            ("BBC News", "Manchester", "https://feeds.bbci.co.uk/news/england/manchester/rss.xml", 1),
+            ("Full Fact", "Fact Checks", "https://fullfact.org/feed/", 7),
+        ]),
+        ("United States", [
+            ("PBS NewsHour", "Headlines", "https://www.pbs.org/newshour/feeds/rss/headlines", 1),
+            ("CBS News", "Politics", "https://www.cbsnews.com/latest/rss/politics", 1),
+            ("ABC News", "Top Stories", "https://abcnews.com/abcnews/topstories", 1),
+            ("NPR", "World", "https://feeds.npr.org/1004/rss.xml", 1),
+            ("ProPublica", "Investigations", "https://www.propublica.org/feeds/propublica/main", 7),
+            ("Fox News", "World", "https://moxie.foxnews.com/google-publisher/world.xml", 1),
+        ]),
+        ("Europe", [
+            ("Deutsche Welle", "English", "https://rss.dw.com/xml/rss-en-all", 1),
+            ("Euronews", "Europe", "https://www.euronews.com/rss?format=mrss&level=vertical&name=my-europe", 1),
+        ]),
+        ("Middle East", [
+            ("Al Jazeera English", "News", "https://www.aljazeera.com/xml/rss/all.xml", 1),
+            ("Times of Israel", "News", "https://www.timesofisrael.com/feed/", 1),
+            ("Haaretz", "Latest Headlines", "https://www.haaretz.com/srv/haaretz-latest-headlines", 1),
+        ]),
+        ("Africa", [
+            ("Premium Times Nigeria", "News", "https://www.premiumtimesng.com/feed", 1),
+            ("BBC News", "Africa", "https://feeds.bbci.co.uk/news/world/africa/rss.xml", 1),
+        ]),
+        ("Asia-Pacific", [
+            ("CNA", "Asia", "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml&category=6511", 1),
+            ("ABC Australia", "Just In", "https://www.abc.net.au/news/feed/51120/rss.xml", 1),
+            ("SBS News", "World", "https://www.sbs.com.au/news/topic/world/feed", 1),
+            ("Dawn", "News", "https://www.dawn.com/feeds/home", 1),
+            ("Nippon.com", "Japan News", "https://www.nippon.com/en/rss-others/news.xml", 3),
+        ]),
+        ("Sport", [
+            ("BBC Sport", "Football", "https://feeds.bbci.co.uk/sport/football/rss.xml", 1),
+            ("The Guardian", "Basketball", "https://www.theguardian.com/sport/nba/rss", 1),
+            ("BBC Sport", "Tennis", "https://feeds.bbci.co.uk/sport/tennis/rss.xml", 1),
+        ]),
+        ("Technology", [
+            ("Ars Technica", "Technology", "https://feeds.arstechnica.com/arstechnica/index", 1),
+            ("Engadget", "Technology", "https://www.engadget.com/rss.xml", 1),
+            ("The Register", "Technology", "https://www.theregister.com/?lab_viewport=rss", 1),
+        ]),
+        ("Artificial Intelligence", [
+            ("The Decoder", "Artificial Intelligence", "https://the-decoder.com/feed/", 3),
+        ]),
+        ("Cybersecurity", [
+            ("The Record", "Cybersecurity", "https://therecord.media/feed", 3),
+            ("Krebs on Security", "Security", "https://krebsonsecurity.com/feed/", 7),
+            ("UK NCSC", "Security Updates", "https://www.ncsc.gov.uk/api/1/services/v1/all-rss-feed.xml", 7),
+        ]),
+        ("Privacy and Digital Rights", [
+            ("Electronic Frontier Foundation", "Digital Rights", "https://www.eff.org/rss/updates.xml", 7),
+            ("Privacy International", "Privacy", "https://privacyinternational.org/rss.xml", 14),
+            ("Tor Project", "News", "https://blog.torproject.org/feed.xml", 14),
+        ]),
+        ("Mobile and Android", [
+            ("GrapheneOS", "Release Announcements", "https://grapheneos.org/releases.atom", 7),
+            ("Android Developers", "News", "https://android-developers.googleblog.com/feeds/posts/default?alt=rss", 7),
+        ]),
+        ("Finance", [
+            ("The Guardian", "Business", "https://www.theguardian.com/uk/business/rss", 1),
+            ("CBS News", "MoneyWatch", "https://www.cbsnews.com/latest/rss/moneywatch", 1),
+        ]),
+        ("Banking and Central Banks", [
+            ("Bank of England", "News and Minutes", "https://www.bankofengland.co.uk/rss/news", 7),
+            ("Federal Reserve", "Press Releases", "https://www.federalreserve.gov/feeds/press_all.xml", 7),
+            ("European Central Bank", "Press Releases", "https://www.ecb.europa.eu/rss/press.html", 7),
+            ("HM Treasury", "Official Updates", "https://www.gov.uk/government/organisations/hm-treasury.atom", 7),
+        ]),
+        ("Law", [
+            ("Legal Futures", "Latest News", "https://www.legalfutures.co.uk/category/latest-news/feed", 3),
+            ("Legal Cheek", "News", "https://www.legalcheek.com/feed/", 3),
+            ("EJIL:Talk!", "International Law", "https://www.ejiltalk.org/feed/", 7),
+            ("Courts and Tribunals Judiciary", "Updates", "https://www.judiciary.uk/feed/", 7),
+        ]),
+        ("Regulation and Government", [
+            ("Bank of England PRA", "Prudential Regulation", "https://www.bankofengland.co.uk/rss/prudential-regulation-publications", 7),
+            ("US Securities and Exchange Commission", "Press Releases", "https://www.sec.gov/news/pressreleases.rss", 7),
+            ("UK Competition and Markets Authority", "Official Updates", "https://www.gov.uk/government/organisations/competition-and-markets-authority.atom", 7),
+            ("UK Department for Science, Innovation and Technology", "Official Updates", "https://www.gov.uk/government/organisations/department-for-science-innovation-and-technology.atom", 7),
+        ]),
+        ("Defence", [
+            ("RUSI", "Commentary", "https://www.rusi.org/rss/latest-commentary.xml", 7),
+            ("Breaking Defense", "Defence News", "https://breakingdefense.com/feed/", 3),
+            ("Bellingcat", "Investigations", "https://www.bellingcat.com/feed/", 14),
+            ("UK Ministry of Defence", "Official Updates", "https://www.gov.uk/government/organisations/ministry-of-defence.atom", 7),
+        ]),
+        ("Science", [
+            ("Quanta Magazine", "Science", "https://www.quantamagazine.org/feed/", 7),
+            ("NASA", "News Releases", "https://www.nasa.gov/feed/", 7),
+            ("ScienceDaily", "Top Science", "https://www.sciencedaily.com/rss/top/science.xml", 1),
+            ("Our World in Data", "Articles", "https://ourworldindata.org/atom.xml", 14),
+        ]),
+    ]
+
+    def __init__(self, options, log, progress_reporter):
+        self.issue_date = datetime.now()
+        self.publication_title = self.title
+        requested_edition = os.environ.get("NEWS_EPUB_EDITION", "").strip().title()
+        if requested_edition in {"Morning", "Evening", "Night"}:
+            self.issue_name = requested_edition
+        elif self.issue_date.hour < 12:
+            self.issue_name = "Morning"
+        elif self.issue_date.hour < 21:
+            self.issue_name = "Evening"
+        else:
+            self.issue_name = "Night"
+        self.title = self.issue_date.strftime(f"{self.publication_title} - %A, %d %B %Y - {self.issue_name} Edition")
+        super().__init__(options, log, progress_reporter)
+
+    def publication_date(self):
+        return self.issue_date
+
+    def get_masthead_title(self):
+        return f"{self.publication_title} - {self.issue_name} Edition"
+
+    def default_cover(self, cover_file):
+        try:
+            from calibre.ebooks.covers import cprefs, create_cover, override_prefs
+
+            issue = self.issue_date.strftime(f"%A, %d %B %Y - {self.issue_name} Edition")
+            preferences = override_prefs(cprefs, override_color_theme="Silver", override_style="Half and Half")
+            cover_file.write(create_cover(self.publication_title, [issue], prefs=preferences))
+            cover_file.flush()
+        except Exception:
+            self.log.exception("Failed to generate cover")
+            return False
+        return True
+
+    def parse_feeds(self):
+        original_feeds = self.feeds
+        original_age = self.oldest_article
+        specifications = [entry for group_name, entries in self.feed_groups for entry in entries]
+        selected = specifications[:self.test[0]] if self.test else specifications
+        parsed = []
+        try:
+            for source, section, url, days in selected:
+                self.feeds = [(f"{source} — {section}", url)]
+                self.oldest_article = days
+                parsed.extend(super().parse_feeds())
+        finally:
+            self.feeds = original_feeds
+            self.oldest_article = original_age
+        return parsed
+
+    def get_article_url(self, article):
+        url = super().get_article_url(article)
+        if url and ("abcnews.com/video/" in url or "cbsnews.com/video/" in url):
+            return None
+        return url
+
+    @staticmethod
+    def image_source_is_usable(source):
+        if not source:
+            return False
+        source = source.strip()
+        lowered = source.lower()
+        if lowered.startswith(("data:", "blob:", "javascript:", "about:", "#")):
+            return False
+        rejected = ("1x1", "spacer", "transparent", "tracking", "pixel.gif", "clear.gif")
+        return not any(value in lowered for value in rejected)
+
+    @classmethod
+    def best_srcset_source(cls, srcset):
+        candidates = []
+        for position, item in enumerate((srcset or "").split(",")):
+            parts = item.strip().rsplit(None, 1)
+            source = parts[0].strip() if parts else ""
+            if not cls.image_source_is_usable(source):
+                continue
+            score = position + 1
+            if len(parts) == 2:
+                descriptor = parts[1].lower()
+                try:
+                    if descriptor.endswith("w"):
+                        width = float(descriptor[:-1])
+                        score = 1000000 - width if width >= 1264 else width
+                    elif descriptor.endswith("x"):
+                        density = float(descriptor[:-1])
+                        score = min(density, 2.0) * 1000
+                except ValueError:
+                    pass
+            candidates.append((score, source))
+        return max(candidates, default=(0, ""))[1]
+
+    @classmethod
+    def normalise_images(cls, soup):
+        for fallback in list(soup.find_all("noscript")):
+            try:
+                nested = BeautifulSoup(fallback.decode_contents())
+                image = nested.find("img")
+            except Exception:
+                image = None
+            if image is not None:
+                fallback.replaceWith(image)
+
+        for image in list(soup.find_all("img")):
+            width = image.get("width")
+            height = image.get("height")
+            try:
+                if width and height and int(float(width)) <= 2 and int(float(height)) <= 2:
+                    image.extract()
+                    continue
+            except ValueError:
+                pass
+
+            source = ""
+            for srcset in (image.get("data-srcset"), image.get("srcset")):
+                candidate = cls.best_srcset_source(srcset)
+                if candidate:
+                    source = candidate
+                    break
+
+            if not source:
+                for attribute in (
+                    "data-hi-res-src",
+                    "data-full-src",
+                    "data-original-src",
+                    "data-original",
+                    "data-lazy-src",
+                    "data-image-src",
+                    "data-flickity-lazyload",
+                    "data-src",
+                    "src",
+                ):
+                    candidate = image.get(attribute)
+                    if cls.image_source_is_usable(candidate):
+                        source = candidate.strip()
+                        break
+
+            if not source:
+                picture = image.find_parent("picture")
+                source_tags = picture.find_all("source") if picture is not None else []
+                source_tags = sorted(
+                    source_tags,
+                    key=lambda tag: 1 if "avif" in (tag.get("type") or "").lower() else 0,
+                )
+                for source_tag in source_tags:
+                    candidate = cls.best_srcset_source(source_tag.get("data-srcset") or source_tag.get("srcset"))
+                    if candidate:
+                        source = candidate
+                        break
+
+            if source:
+                image["src"] = source
+            else:
+                image.extract()
+
+    def preprocess_raw_html(self, raw_html, url):
+        raw_html = self.invalid_xml_characters.sub("", raw_html)
+        try:
+            soup = BeautifulSoup(raw_html)
+            self.normalise_images(soup)
+            return str(soup)
+        except Exception:
+            return raw_html
+
+    def preprocess_html(self, soup):
+        self.normalise_images(soup)
+        removable = ["script", "style", "noscript", "template", "iframe", "form", "button", "input", "canvas", "video", "audio", "object", "embed", "source", "svg"]
+        for element in list(soup.find_all(removable)):
+            element.extract()
+        allowed = {
+            "a": {"href", "title"},
+            "img": {"src", "alt", "title"},
+            "td": {"colspan", "rowspan"},
+            "th": {"colspan", "rowspan", "scope"},
+            "ol": {"start"},
+            "time": {"datetime"},
+        }
+        for element in soup.find_all(True):
+            retained = allowed.get(element.name, set())
+            for attribute in list(element.attrs):
+                if attribute not in retained:
+                    del element[attribute]
+        return soup
+
+    def postprocess_html(self, soup, first_fetch):
+        for image in list(soup.find_all("img")):
+            source = (image.get("src") or "").strip().lower()
+            if not source or source.startswith(("http://", "https://", "//", "data:", "blob:")):
+                image.extract()
+        return soup
+
+    def populate_article_metadata(self, article, soup, first):
+        if first:
+            image = soup.find("img", src=True)
+            if image is not None:
+                self.add_toc_thumbnail(article, image.get("src"))
+
+    @staticmethod
+    def element_classes(element):
+        value = element.get("class") or []
+        if isinstance(value, str):
+            return value.split()
+        return list(value)
+
+    def tidy_generated_pages(self, directory):
+        for root, directories, filenames in os.walk(directory):
+            directories.sort()
+            for filename in sorted(filenames):
+                if not filename.lower().endswith((".html", ".xhtml")):
+                    continue
+                path = os.path.join(root, filename)
+                try:
+                    with open(path, "rb") as source:
+                        soup = BeautifulSoup(source.read().decode("utf-8", "replace"))
+                    body = soup.find("body")
+                    if body is None:
+                        continue
+                    navbars = []
+                    for element in body.find_all(True):
+                        classes = self.element_classes(element)
+                        if "calibre_navbar" in classes or "touchscreen_navbar" in classes:
+                            navbars.append(element)
+                    if navbars:
+                        primary = navbars[0]
+                        for duplicate in navbars[1:]:
+                            duplicate.extract()
+                        primary.extract()
+                        body.insert(0, primary)
+                    if os.path.abspath(path) == os.path.abspath(os.path.join(directory, "index.html")):
+                        for paragraph in list(body.find_all(["p", "h3"])):
+                            if not self.tag_to_string(paragraph, use_alt=False).strip() and paragraph.find("img") is None:
+                                paragraph.extract()
+                    with open(path, "wb") as destination:
+                        destination.write(str(soup).encode("utf-8"))
+                except Exception:
+                    self.log.exception(f"Failed to tidy generated page: {path}")
+
+    def create_opf(self, feeds, dir=None):
+        directory = dir or self.output_dir
+        super().create_opf(feeds, dir)
+        self.tidy_generated_pages(directory)

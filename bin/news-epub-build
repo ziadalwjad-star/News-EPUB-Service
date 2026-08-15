@@ -1,0 +1,97 @@
+#!/bin/sh
+set -eu
+
+root="${NEWS_EPUB_ROOT:-/var/lib/news-epub}"
+recipe="${NEWS_EPUB_RECIPE:-/opt/news-epub/news-epub.recipe}"
+outbox="$root/outbox"
+work="$root/work"
+retention_days="${NEWS_EPUB_RETENTION_DAYS:-7}"
+max_attempts="${NEWS_EPUB_MAX_ATTEMPTS:-3}"
+retry_delay="${NEWS_EPUB_RETRY_DELAY:-600}"
+lock_wait="${NEWS_EPUB_LOCK_WAIT:-300}"
+lock="${NEWS_EPUB_LOCK:-$work/.build.lock}"
+output_profile="${NEWS_EPUB_OUTPUT_PROFILE:-}"
+edition_key="${1:-auto}"
+
+case "$edition_key" in
+    morning|Morning) edition="Morning" ;;
+    evening|Evening) edition="Evening" ;;
+    night|Night) edition="Night" ;;
+    auto)
+        hour="$(date '+%H')"
+        if [ "$hour" -lt 12 ]; then
+            edition="Morning"
+        elif [ "$hour" -lt 21 ]; then
+            edition="Evening"
+        else
+            edition="Night"
+        fi
+        ;;
+    *)
+        printf 'Unknown edition: %s\n' "$edition_key" >&2
+        exit 64
+        ;;
+esac
+
+case "$retention_days:$max_attempts:$retry_delay:$lock_wait" in
+    *[!0-9:]*|:*|*::*|*:) 
+        printf 'Invalid numeric configuration.\n' >&2
+        exit 64
+        ;;
+esac
+
+[ "$max_attempts" -gt 0 ] || {
+    printf 'NEWS_EPUB_MAX_ATTEMPTS must be greater than zero.\n' >&2
+    exit 64
+}
+
+[ -r "$recipe" ] || {
+    printf 'Recipe not readable: %s\n' "$recipe" >&2
+    exit 66
+}
+
+issue="$(LC_ALL=C date '+%A %d %B %Y')"
+temporary="$work/.News EPUB - $issue - $edition.building.epub"
+destination="$outbox/News EPUB - $issue - $edition.epub"
+
+umask 0002
+mkdir -p "$outbox" "$work/tmp"
+TMPDIR="$work/tmp"
+NEWS_EPUB_EDITION="$edition"
+export TMPDIR NEWS_EPUB_EDITION
+
+exec 9>"$lock"
+if ! flock -w "$lock_wait" 9; then
+    printf 'Another build still holds the service lock; %s edition not started.\n' "$edition" >&2
+    exit 75
+fi
+
+attempt=1
+status=1
+while [ "$attempt" -le "$max_attempts" ]; do
+    printf 'News EPUB %s edition: attempt %s of %s\n' "$edition" "$attempt" "$max_attempts"
+    rm -f "$temporary"
+
+    if [ -n "$output_profile" ]; then
+        ebook-convert "$recipe" "$temporary" --output-profile "$output_profile" && status=0 || status=$?
+    else
+        ebook-convert "$recipe" "$temporary" && status=0 || status=$?
+    fi
+
+    if [ "$status" -eq 0 ] && test -s "$temporary" && unzip -tqq "$temporary"; then
+        image_count="$(unzip -Z1 "$temporary" | awk 'BEGIN { count = 0 } { name = tolower($0); if (name ~ /\.(jpg|jpeg|png|gif|webp|svg)$/) count++ } END { print count }')"
+        printf 'Validated EPUB contains %s embedded image files.\n' "$image_count"
+        mv -f "$temporary" "$destination"
+        find "$outbox" -maxdepth 1 -type f -name 'News EPUB - *.epub' -mtime "+$retention_days" -delete
+        exit 0
+    fi
+
+    [ "$status" -ne 0 ] || status=65
+    rm -f "$temporary"
+    if [ "$attempt" -lt "$max_attempts" ]; then
+        sleep "$retry_delay"
+    fi
+    attempt=$((attempt + 1))
+done
+
+exit "$status"

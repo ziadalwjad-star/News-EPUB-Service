@@ -1,0 +1,20 @@
+[Unit]
+Description=Build News EPUB %i edition
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=news-epub
+Group=news-epub
+UMask=0002
+EnvironmentFile=-/etc/news-epub/news-epub.conf
+Environment=QT_QPA_PLATFORM=offscreen
+ExecStart=/usr/local/bin/news-epub-build %i
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+TimeoutStartSec=6h
