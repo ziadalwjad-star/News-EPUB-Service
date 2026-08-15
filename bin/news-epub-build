@@ -1,33 +1,109 @@
 #!/bin/sh
 set -eu
 
+EX_USAGE=64
+EX_DATAERR=65
+EX_NOINPUT=66
+EX_UNAVAILABLE=69
+EX_CANTCREAT=73
+EX_IOERR=74
+EX_TEMPFAIL=75
+
 root="${NEWS_EPUB_ROOT:-/var/lib/news-epub}"
+work="${NEWS_EPUB_WORK:-$root/work}"
+outbox="${NEWS_EPUB_OUTBOX:-$root/outbox}"
 recipe="${NEWS_EPUB_RECIPE:-/opt/news-epub/news-epub.recipe}"
 validator="${NEWS_EPUB_VALIDATOR:-/usr/local/bin/news-epub-validate}"
-outbox="$root/outbox"
-work="$root/work"
+ebook_convert="${NEWS_EPUB_EBOOK_CONVERT:-ebook-convert}"
+epubcheck="${NEWS_EPUB_EPUBCHECK:-}"
+filename_prefix="${NEWS_EPUB_FILENAME_PREFIX:-news-epub}"
 retention_days="${NEWS_EPUB_RETENTION_DAYS:-7}"
 max_attempts="${NEWS_EPUB_MAX_ATTEMPTS:-3}"
 retry_delay="${NEWS_EPUB_RETRY_DELAY:-600}"
 lock_wait="${NEWS_EPUB_LOCK_WAIT:-300}"
-lock="${NEWS_EPUB_LOCK:-$work/.build.lock}"
+lock="${NEWS_EPUB_LOCK:-$work/build.lock}"
 output_profile="${NEWS_EPUB_OUTPUT_PROFILE:-}"
 epub_version="${NEWS_EPUB_EPUB_VERSION:-3}"
 require_epubcheck="${NEWS_EPUB_REQUIRE_EPUBCHECK:-0}"
-epubcheck_command="${NEWS_EPUB_EPUBCHECK:-}"
 umask_value="${NEWS_EPUB_UMASK:-0027}"
+max_uncompressed_mib="${NEWS_EPUB_MAX_UNCOMPRESSED_MIB:-512}"
+max_member_mib="${NEWS_EPUB_MAX_MEMBER_MIB:-128}"
+stale_run_hours="${NEWS_EPUB_STALE_RUN_HOURS:-24}"
 edition_key="${1:-auto}"
 
 log() {
-    printf '%s %s\n' "$(date -Is)" "$*"
+    level="$1"
+    stage="$2"
+    shift 2
+    printf '%s level=%s stage=%s %s\n' "$(date -Is)" "$level" "$stage" "$*"
 }
 
 fail() {
     code="$1"
-    shift
-    printf '%s ERROR: %s\n' "$(date -Is)" "$*" >&2
+    stage="$2"
+    shift 2
+    log error "$stage" "$*" >&2
     exit "$code"
 }
+
+usage() {
+    cat <<'EOF'
+Usage: news-epub-build [morning|evening|night|auto]
+
+Build, validate and atomically publish one News EPUB edition.
+Configuration is read from NEWS_EPUB_* environment variables; see
+config/news-epub.conf.example and README.md for the supported settings.
+EOF
+}
+
+if [ "$#" -gt 1 ]; then
+    fail "$EX_USAGE" config "expected at most one edition argument; use --help for usage"
+fi
+case "${1:-}" in
+    -h|--help) usage; exit 0 ;;
+esac
+
+is_uint() {
+    case "$1" in
+        ''|*[!0-9]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+require_uint() {
+    name="$1"
+    value="$2"
+    is_uint "$value" || fail "$EX_USAGE" config "invalid non-negative integer for $name: $value"
+}
+
+require_uint NEWS_EPUB_RETENTION_DAYS "$retention_days"
+require_uint NEWS_EPUB_MAX_ATTEMPTS "$max_attempts"
+require_uint NEWS_EPUB_RETRY_DELAY "$retry_delay"
+require_uint NEWS_EPUB_LOCK_WAIT "$lock_wait"
+require_uint NEWS_EPUB_MAX_UNCOMPRESSED_MIB "$max_uncompressed_mib"
+require_uint NEWS_EPUB_MAX_MEMBER_MIB "$max_member_mib"
+require_uint NEWS_EPUB_STALE_RUN_HOURS "$stale_run_hours"
+[ "$max_attempts" -gt 0 ] || fail "$EX_USAGE" config "NEWS_EPUB_MAX_ATTEMPTS must be greater than zero"
+[ "$max_uncompressed_mib" -gt 0 ] || fail "$EX_USAGE" config "NEWS_EPUB_MAX_UNCOMPRESSED_MIB must be greater than zero"
+[ "$max_member_mib" -gt 0 ] || fail "$EX_USAGE" config "NEWS_EPUB_MAX_MEMBER_MIB must be greater than zero"
+
+case "$epub_version" in
+    2|3) ;;
+    *) fail "$EX_USAGE" config "NEWS_EPUB_EPUB_VERSION must be 2 or 3" ;;
+esac
+case "$require_epubcheck" in
+    0|1) ;;
+    *) fail "$EX_USAGE" config "NEWS_EPUB_REQUIRE_EPUBCHECK must be 0 or 1" ;;
+esac
+case "$umask_value" in
+    0[0-7][0-7][0-7]|[0-7][0-7][0-7]) ;;
+    *) fail "$EX_USAGE" config "NEWS_EPUB_UMASK must be a three- or four-digit octal mask" ;;
+esac
+case "$filename_prefix" in
+    ''|*[!A-Za-z0-9._-]*)
+        fail "$EX_USAGE" config "NEWS_EPUB_FILENAME_PREFIX may contain only letters, numbers, dot, underscore and hyphen"
+        ;;
+esac
 
 case "$edition_key" in
     morning|Morning) edition="Morning" ;;
@@ -43,99 +119,140 @@ case "$edition_key" in
             edition="Night"
         fi
         ;;
-    *) fail 64 "Unknown edition: $edition_key" ;;
+    *) fail "$EX_USAGE" config "unknown edition: $edition_key" ;;
 esac
+edition_slug="$(printf '%s' "$edition" | tr '[:upper:]' '[:lower:]')"
 
-case "$retention_days:$max_attempts:$retry_delay:$lock_wait" in
-    *[!0-9:]*|:*|*::*|*:) fail 64 "Invalid numeric configuration" ;;
-esac
-[ "$max_attempts" -gt 0 ] || fail 64 "NEWS_EPUB_MAX_ATTEMPTS must be greater than zero"
-case "$epub_version" in 2|3) ;; *) fail 64 "NEWS_EPUB_EPUB_VERSION must be 2 or 3" ;; esac
-case "$require_epubcheck" in 0|1) ;; *) fail 64 "NEWS_EPUB_REQUIRE_EPUBCHECK must be 0 or 1" ;; esac
-case "$umask_value" in
-    0[0-7][0-7][0-7]|[0-7][0-7][0-7]) ;;
-    *) fail 64 "NEWS_EPUB_UMASK must be a three- or four-digit octal mask" ;;
-esac
+[ -r "$recipe" ] || fail "$EX_NOINPUT" preflight "recipe is not readable: $recipe"
+command -v "$ebook_convert" >/dev/null 2>&1 || fail "$EX_UNAVAILABLE" preflight "ebook converter is unavailable: $ebook_convert"
+command -v flock >/dev/null 2>&1 || fail "$EX_UNAVAILABLE" preflight "required command is unavailable: flock"
+command -v stat >/dev/null 2>&1 || fail "$EX_UNAVAILABLE" preflight "required command is unavailable: stat"
+command -v mktemp >/dev/null 2>&1 || fail "$EX_UNAVAILABLE" preflight "required command is unavailable: mktemp"
+command -v sync >/dev/null 2>&1 || fail "$EX_UNAVAILABLE" preflight "required command is unavailable: sync"
+[ -x "$validator" ] || fail "$EX_UNAVAILABLE" preflight "EPUB validator is not executable: $validator"
 
-[ -r "$recipe" ] || fail 66 "Recipe not readable: $recipe"
-command -v ebook-convert >/dev/null 2>&1 || fail 69 "ebook-convert is not installed or not on PATH"
-command -v flock >/dev/null 2>&1 || fail 69 "flock is not installed or not on PATH"
-command -v python3 >/dev/null 2>&1 || fail 69 "python3 is not installed or not on PATH"
-[ -r "$validator" ] || fail 69 "EPUB validator is not readable: $validator"
-
-if [ -n "$epubcheck_command" ]; then
-    command -v "$epubcheck_command" >/dev/null 2>&1 || fail 69 "Configured EPUBCheck command is unavailable: $epubcheck_command"
+if [ -n "$epubcheck" ]; then
+    command -v "$epubcheck" >/dev/null 2>&1 || fail "$EX_UNAVAILABLE" preflight "configured EPUBCheck executable is unavailable: $epubcheck"
 elif command -v epubcheck >/dev/null 2>&1; then
-    epubcheck_command="$(command -v epubcheck)"
+    epubcheck="$(command -v epubcheck)"
 elif [ "$require_epubcheck" -eq 1 ]; then
-    fail 69 "EPUBCheck is required but no epubcheck command is available"
+    fail "$EX_UNAVAILABLE" preflight "EPUBCheck is required but no executable was found; set NEWS_EPUB_EPUBCHECK or install epubcheck"
 fi
 
 umask "$umask_value"
-mkdir -p "$outbox" "$work" "$work/tmp"
+mkdir -p -- "$work" "$work/tmp" "$outbox" || fail "$EX_CANTCREAT" preflight "failed to create work or outbox directories"
+[ -d "$work" ] && [ -w "$work" ] || fail "$EX_CANTCREAT" preflight "work directory is not writable: $work"
+[ -d "$outbox" ] && [ -w "$outbox" ] || fail "$EX_CANTCREAT" preflight "outbox directory is not writable: $outbox"
 [ "$(stat -c '%d' "$work")" = "$(stat -c '%d' "$outbox")" ] || \
-    fail 73 "Work and outbox must be on the same filesystem for atomic publication"
+    fail "$EX_CANTCREAT" preflight "work and outbox must be on the same filesystem for atomic publication"
 
 TMPDIR="$work/tmp"
 NEWS_EPUB_EDITION="$edition"
 export TMPDIR NEWS_EPUB_EDITION
 
-exec 9>"$lock"
+exec 9>"$lock" || fail "$EX_CANTCREAT" lock "cannot open lock file: $lock"
 if ! flock -w "$lock_wait" 9; then
-    fail 75 "Another build still holds the service lock; $edition edition not started"
+    fail "$EX_TEMPFAIL" lock "another build holds the service lock; $edition edition was not started"
 fi
 
-run_dir="$(mktemp -d "$work/run.XXXXXX")"
-cleanup() {
-    rm -rf -- "$run_dir"
-}
-trap cleanup EXIT HUP INT TERM
+if [ "$stale_run_hours" -gt 0 ]; then
+    stale_minutes=$((stale_run_hours * 60))
+    if ! find "$work" -mindepth 1 -maxdepth 1 -type d -name '.run.*' -mmin "+$stale_minutes" -exec rm -rf -- {} +; then
+        log warning cleanup "could not remove one or more stale staging directories"
+    fi
+fi
 
-issue="$(LC_ALL=C date '+%A %d %B %Y')"
-temporary="$run_dir/News EPUB - $issue - $edition.epub"
-destination="$outbox/News EPUB - $issue - $edition.epub"
+run_dir="$(mktemp -d "$work/.run.XXXXXX")" || fail "$EX_CANTCREAT" staging "failed to create a staging directory under $work"
+temporary="$run_dir/candidate.epub"
+run_active=1
+
+cleanup() {
+    if [ "${run_active:-0}" -eq 1 ] && [ -n "${run_dir:-}" ]; then
+        rm -rf -- "$run_dir" || log warning cleanup "failed to remove staging directory: $run_dir"
+    fi
+}
+
+on_signal() {
+    signal_name="$1"
+    signal_status="$2"
+    log error signal "received $signal_name; aborting without publishing"
+    exit "$signal_status"
+}
+
+trap cleanup EXIT
+trap 'on_signal HUP 129' HUP
+trap 'on_signal INT 130' INT
+trap 'on_signal TERM 143' TERM
+
+issue_date="$(LC_ALL=C date '+%Y-%m-%d')"
+destination="$outbox/${filename_prefix}_${issue_date}_${edition_slug}.epub"
 
 attempt=1
-status=1
+conversion_status=1
 while [ "$attempt" -le "$max_attempts" ]; do
-    log "News EPUB $edition edition: attempt $attempt of $max_attempts"
+    log info convert "edition=$edition attempt=$attempt/$max_attempts"
     rm -f -- "$temporary"
-    status=0
 
     set -- "$recipe" "$temporary" --epub-version "$epub_version"
     if [ -n "$output_profile" ]; then
         set -- "$@" --output-profile "$output_profile"
     fi
-    ebook-convert "$@" || status=$?
 
-    if [ "$status" -eq 0 ] && [ -s "$temporary" ]; then
-        if [ "$epub_version" -eq 3 ]; then
-            python3 "$validator" --require-epub3 "$temporary" || status=$?
-        else
-            python3 "$validator" "$temporary" || status=$?
-        fi
-    elif [ "$status" -eq 0 ]; then
-        status=65
-        log "Generated EPUB is empty"
+    conversion_status=0
+    "$ebook_convert" "$@" || conversion_status=$?
+    if [ "$conversion_status" -eq 0 ] && [ -s "$temporary" ]; then
+        break
+    fi
+    if [ "$conversion_status" -eq 0 ]; then
+        conversion_status="$EX_DATAERR"
+        log error convert "converter exited successfully but produced an empty EPUB"
+    else
+        log error convert "converter failed with status=$conversion_status"
     fi
 
-    if [ "$status" -eq 0 ] && [ -n "$epubcheck_command" ]; then
-        "$epubcheck_command" "$temporary" || status=$?
-    fi
-
-    if [ "$status" -eq 0 ]; then
-        mv -f -- "$temporary" "$destination"
-        find "$outbox" -maxdepth 1 -type f -name 'News EPUB - *.epub' -mtime "+$retention_days" -delete
-        log "Published validated EPUB: $destination"
-        exit 0
-    fi
-
-    log "Build attempt $attempt failed with status $status"
     rm -f -- "$temporary"
-    if [ "$attempt" -lt "$max_attempts" ]; then
-        sleep "$retry_delay"
+    if [ "$attempt" -ge "$max_attempts" ]; then
+        fail "$conversion_status" convert "all conversion attempts failed; no output was published"
     fi
+    log warning convert "retrying after ${retry_delay}s"
+    sleep "$retry_delay"
     attempt=$((attempt + 1))
 done
 
-exit "$status"
+log info validate "running project EPUB integrity and privacy checks"
+set -- --max-uncompressed-mib "$max_uncompressed_mib" --max-member-mib "$max_member_mib"
+if [ "$epub_version" -eq 3 ]; then
+    set -- "$@" --require-epub3
+fi
+if ! "$validator" "$@" "$temporary"; then
+    fail "$EX_DATAERR" validate "project validation failed; candidate was not published and will not be retried"
+fi
+
+if [ -n "$epubcheck" ]; then
+    log info epubcheck "running standards validation"
+    if ! "$epubcheck" "$temporary"; then
+        fail "$EX_DATAERR" epubcheck "EPUBCheck reported an error; candidate was not published and will not be retried"
+    fi
+elif [ "$require_epubcheck" -eq 0 ]; then
+    log warning epubcheck "EPUBCheck is unavailable; project validation passed but full standards validation was skipped"
+fi
+
+log info publish "syncing candidate before atomic rename"
+if ! sync -f "$temporary"; then
+    fail "$EX_IOERR" publish "failed to flush candidate EPUB to storage; nothing was published"
+fi
+if ! mv -f -- "$temporary" "$destination"; then
+    fail "$EX_IOERR" publish "atomic rename into the outbox failed; no new output was published"
+fi
+if ! sync -f "$outbox"; then
+    fail "$EX_IOERR" publish "EPUB was renamed into the outbox, but directory sync failed; verify $destination before retrying"
+fi
+
+if ! find "$outbox" -maxdepth 1 -type f -name "${filename_prefix}_*.epub" -mtime "+$retention_days" -delete; then
+    log warning cleanup "publication succeeded but retention cleanup failed"
+fi
+
+run_active=0
+rm -rf -- "$run_dir" || log warning cleanup "publication succeeded but staging cleanup failed: $run_dir"
+log info publish "published=$destination edition=$edition"
+exit 0

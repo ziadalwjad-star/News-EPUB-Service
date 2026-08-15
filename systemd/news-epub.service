@@ -1,5 +1,5 @@
 [Unit]
-Description=Build News EPUB %i edition
+Description=Build and validate the current News EPUB edition
 Wants=network-online.target
 After=network-online.target
 
@@ -10,14 +10,23 @@ Group=news-epub
 UMask=0027
 EnvironmentFile=-/etc/news-epub/news-epub.conf
 Environment=QT_QPA_PLATFORM=offscreen
-ExecStart=/usr/local/bin/news-epub-build %i
+ExecStart=/usr/local/bin/news-epub-build auto
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
 NoNewPrivileges=true
+PrivateDevices=true
 PrivateTmp=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
 ProtectSystem=full
+RestrictNamespaces=true
+RestrictRealtime=true
 RestrictSUIDSGID=true
 LockPersonality=true
-RestrictRealtime=true
+CapabilityBoundingSet=
+KillMode=control-group
 TimeoutStartSec=6h
+TimeoutStopSec=30s

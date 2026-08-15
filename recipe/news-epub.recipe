@@ -1,20 +1,40 @@
+import ipaddress
 import os
 import re
 from datetime import datetime
+from urllib.parse import urlsplit
 
 from calibre.ebooks.BeautifulSoup import BeautifulSoup
 from calibre.web.feeds.news import BasicNewsRecipe
 
 
+def env_int(name, default, minimum, maximum):
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if value < minimum or value > maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
 class NewsEpubRecipe(BasicNewsRecipe):
     title = os.environ.get("NEWS_EPUB_TITLE", "News Digest").strip() or "News Digest"
-    description = "A curated news digest prepared as an EPUB for scheduled offline reading."
-    language = "en"
+    description = os.environ.get(
+        "NEWS_EPUB_DESCRIPTION",
+        "A curated news digest prepared for private offline reading.",
+    ).strip()
+    language = os.environ.get("NEWS_EPUB_LANGUAGE", "en").strip() or "en"
     publication_type = "newspaper"
     requires_version = (9, 0, 0)
     timefmt = ""
     oldest_article = 1
-    max_articles_per_feed = 20
+    max_articles_per_feed = env_int("NEWS_EPUB_MAX_ARTICLES_PER_FEED", 20, 1, 100)
+    min_issue_articles = env_int("NEWS_EPUB_MIN_ARTICLES", 10, 1, 10000)
+    source_image_target_width = env_int("NEWS_EPUB_IMAGE_TARGET_WIDTH", 1600, 600, 5000)
     remove_empty_feeds = True
     ignore_duplicate_articles = {"title", "url"}
     use_embedded_content = None
@@ -24,57 +44,50 @@ class NewsEpubRecipe(BasicNewsRecipe):
     no_stylesheets = True
     remove_attributes = ["style", "font", "onclick", "onload"]
     recursions = 0
-    simultaneous_downloads = 3
-    timeout = 75
+    simultaneous_downloads = env_int("NEWS_EPUB_DOWNLOAD_WORKERS", 3, 1, 8)
+    timeout = env_int("NEWS_EPUB_FETCH_TIMEOUT", 75, 10, 300)
     browser_type = "qt"
     handle_gzip = True
     compress_news_images = True
-    compress_news_images_max_size = 96
     scale_news_images_to_device = True
     center_navbar = True
-    conversion_options = {
-        "flow_size": 0,
-        "pretty_print": False,
-        "base_font_size": 16,
-        "linearize_tables": True,
-    }
+    conversion_options = {"pretty_print": False}
+
     extra_css = """
 body {
-    margin: 0 2.5%;
+    margin: 0 3%;
     font-family: serif;
     font-size: 1em;
-    line-height: 1.46;
+    line-height: 1.48;
     text-align: left;
 }
 h1, h2, h3, h4 {
     font-family: sans-serif;
     font-weight: bold;
-    line-height: 1.16;
+    line-height: 1.18;
     page-break-after: avoid;
     break-after: avoid;
 }
 h1 {
-    margin: 0.7em 0 0.42em;
-    padding-bottom: 0.28em;
-    border-bottom: 0.12em solid #222;
-    font-size: 1.58em;
+    margin: 0.72em 0 0.38em;
+    padding-bottom: 0.32em;
+    border-bottom: 0.1em solid #333;
+    font-size: 1.62em;
 }
 h2 {
-    margin: 0.88em 0 0.36em;
-    padding-left: 0.48em;
-    border-left: 0.24em solid #555;
-    font-size: 1.3em;
+    margin: 1.05em 0 0.4em;
+    font-size: 1.28em;
 }
 h3 {
-    margin: 0.8em 0 0.3em;
-    font-size: 1.15em;
+    margin: 0.92em 0 0.34em;
+    font-size: 1.14em;
 }
 h4 {
-    margin: 0.7em 0 0.25em;
+    margin: 0.82em 0 0.3em;
     font-size: 1em;
 }
 p {
-    margin: 0.66em 0;
+    margin: 0.7em 0;
     orphans: 3;
     widows: 3;
 }
@@ -84,46 +97,46 @@ a {
 }
 img {
     display: block;
-    max-width: 98%;
+    max-width: 100%;
     height: auto;
-    margin: 0.9em auto 0.45em;
+    margin: 1em auto 0.4em;
     page-break-inside: avoid;
     break-inside: avoid;
 }
 .calibre-nuked-tag-figure, figure {
-    margin: 0.9em 0;
+    margin: 1em 0 1.1em;
     page-break-inside: avoid;
     break-inside: avoid;
 }
 .calibre-nuked-tag-figcaption, figcaption {
-    margin: 0.15em 0 0.9em;
+    margin: 0.3em 0 0;
     font-family: sans-serif;
     font-size: 0.8em;
-    line-height: 1.3;
+    line-height: 1.34;
     color: #444;
-    text-align: center;
+    text-align: left;
 }
 blockquote {
-    margin: 0.8em 0.4em;
-    padding: 0.1em 0.8em;
-    border-left: 0.22em solid #777;
-    font-style: italic;
+    margin: 1em 0;
+    padding: 0.08em 0 0.08em 0.8em;
+    border-left: 0.14em solid #666;
+    font-style: normal;
 }
 ul, ol {
-    margin: 0.6em 0;
+    margin: 0.72em 0;
     padding-left: 1.45em;
 }
 li {
-    margin: 0.25em 0;
+    margin: 0.28em 0;
 }
 table {
     width: 100%;
-    margin: 0.8em 0;
+    margin: 1em 0;
     border-collapse: collapse;
-    font-size: 0.88em;
+    font-size: 0.9em;
 }
 th, td {
-    padding: 0.34em;
+    padding: 0.38em;
     border: 1px solid #888;
     vertical-align: top;
 }
@@ -133,84 +146,83 @@ th {
 }
 pre, code {
     font-family: monospace;
-    font-size: 0.88em;
+    font-size: 0.9em;
     white-space: pre-wrap;
     word-wrap: break-word;
 }
 hr {
-    margin: 1.1em 0;
+    margin: 1.3em 0;
     border: 0;
-    border-top: 1px solid #777;
+    border-top: 1px solid #888;
 }
-.calibre_navbar {
-    margin: 0 0 1em;
-    padding: 0.56em 0.25em 0.52em;
+.calibre_navbar, .touchscreen_navbar {
+    margin: 0 0 1.1em;
+    padding: 0.58em 0 0.52em;
     border: 0;
-    border-bottom: 0.12em solid #777;
+    border-bottom: 1px solid #888;
     font-family: sans-serif;
-    font-size: 0.8em;
+    font-size: 0.82em;
     font-weight: bold;
     line-height: 1.5;
     text-align: center;
-    page-break-after: avoid;
-    break-after: avoid;
     page-break-inside: avoid;
     break-inside: avoid;
 }
-.calibre_navbar hr {
+.calibre_navbar hr, .touchscreen_navbar hr {
     display: none;
 }
-.calibre_navbar a {
+.calibre_navbar a, .touchscreen_navbar a {
+    color: #111;
     text-decoration: none;
 }
 .calibre_feed_list, .calibre_article_list {
-    margin: 0.45em 0;
-    padding-left: 1.25em;
+    margin: 0.5em 0;
+    padding-left: 0;
+    list-style-type: none;
+}
+.calibre_feed_list li, .calibre_article_list li {
+    margin: 0;
+    padding: 0.7em 0;
+    border-bottom: 1px solid #bbb;
+    page-break-inside: avoid;
+    break-inside: avoid;
 }
 .calibre_feed_list li {
-    margin: 0;
-    padding: 0.55em 0;
-    border-bottom: 1px solid #bbb;
     font-family: sans-serif;
     font-weight: bold;
-    page-break-inside: avoid;
 }
 .calibre_feed_title {
-    margin-top: 0.35em;
-}
-.calibre_article_list li {
-    margin: 0;
-    padding: 0.62em 0;
-    border-bottom: 1px solid #ccc;
-    page-break-inside: avoid;
+    margin-top: 0.45em;
 }
 .calibre_article_list .article {
     display: block;
     font-family: sans-serif;
     font-weight: bold;
-    line-height: 1.25;
+    line-height: 1.28;
+    color: #111;
     text-decoration: none;
 }
 .article_date {
     display: block;
-    margin-top: 0.18em;
+    margin-top: 0.2em;
     font-family: sans-serif;
-    font-size: 0.78em;
+    font-size: 0.8em;
+    color: #444;
 }
 .article_description {
-    margin-top: 0.32em;
-    font-size: 0.88em;
-    line-height: 1.34;
+    margin-top: 0.34em;
+    font-size: 0.9em;
+    line-height: 1.38;
 }
 .calibre_feed_description {
-    margin: 0.35em 0 0.65em;
-    font-size: 0.88em;
-}
-body > div:first-child > p:first-child {
-    margin: 0.2em 0 0.6em;
+    margin: 0.4em 0 0.8em;
+    font-size: 0.9em;
+    line-height: 1.38;
 }
 """
+
     invalid_xml_characters = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+    unsafe_link_schemes = ("javascript:", "data:", "blob:", "file:")
 
     feed_groups = [
         ("World", [
@@ -327,32 +339,44 @@ body > div:first-child > p:first-child {
             self.issue_name = "Evening"
         else:
             self.issue_name = "Night"
-        self.title = self.issue_date.strftime(f"{self.publication_title} - %A, %d %B %Y - {self.issue_name} Edition")
+        self.title = self.issue_date.strftime(
+            f"{self.publication_title} — %A, %d %B %Y — {self.issue_name} Edition"
+        )
         super().__init__(options, log, progress_reporter)
 
     def publication_date(self):
         return self.issue_date
 
     def get_masthead_title(self):
-        return f"{self.publication_title} - {self.issue_name} Edition"
+        return f"{self.publication_title} — {self.issue_name} Edition"
 
     def default_cover(self, cover_file):
         try:
             from calibre.ebooks.covers import cprefs, create_cover, override_prefs
 
-            issue = self.issue_date.strftime(f"%A, %d %B %Y - {self.issue_name} Edition")
-            preferences = override_prefs(cprefs, override_color_theme="Silver", override_style="Half and Half")
-            cover_file.write(create_cover(self.publication_title, [issue], prefs=preferences))
+            date_line = self.issue_date.strftime("%A, %d %B %Y")
+            preferences = override_prefs(
+                cprefs,
+                override_color_theme="Silver",
+                override_style="Half and Half",
+            )
+            cover_file.write(
+                create_cover(
+                    self.publication_title,
+                    [f"{self.issue_name.upper()} EDITION", date_line],
+                    prefs=preferences,
+                )
+            )
             cover_file.flush()
         except Exception:
-            self.log.exception("Failed to generate cover")
-            return False
+            self.log.exception("Cover generation failed")
+            raise
         return True
 
     def parse_feeds(self):
         original_feeds = self.feeds
         original_age = self.oldest_article
-        specifications = [entry for group_name, entries in self.feed_groups for entry in entries]
+        specifications = [entry for _group_name, entries in self.feed_groups for entry in entries]
         selected = specifications[:self.test[0]] if self.test else specifications
         parsed = []
         try:
@@ -363,21 +387,70 @@ body > div:first-child > p:first-child {
         finally:
             self.feeds = original_feeds
             self.oldest_article = original_age
+
+        article_count = sum(len(feed) for feed in parsed)
+        minimum_articles = 1 if self.test else self.min_issue_articles
+        self.log.info(f"Parsed {article_count} articles from {len(parsed)} non-empty feed results")
+        if article_count < minimum_articles:
+            raise RuntimeError(
+                f"Issue contains {article_count} articles; minimum required is {minimum_articles}"
+            )
         return parsed
+
+    @staticmethod
+    def url_for_log(url):
+        value = (url or "").strip()
+        split = urlsplit(value)
+        if split.scheme and split.hostname:
+            host = split.hostname
+            if ":" in host and not host.startswith("["):
+                host = f"[{host}]"
+            if split.port:
+                host = f"{host}:{split.port}"
+            return f"{split.scheme}://{host}{split.path or '/'}"
+        return split.path or "<unknown-url>"
+
+    @staticmethod
+    def url_has_unsafe_network_target(url):
+        split = urlsplit((url or "").strip())
+        if not split.scheme and not split.netloc:
+            return False
+        if split.scheme.lower() not in {"http", "https"} or not split.hostname:
+            return True
+        if split.username or split.password:
+            return True
+        hostname = split.hostname.rstrip(".").lower()
+        if hostname == "localhost" or hostname.endswith(".localhost"):
+            return True
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            return False
+        return not address.is_global
 
     def get_article_url(self, article):
         url = super().get_article_url(article)
-        if url and ("abcnews.com/video/" in url or "cbsnews.com/video/" in url):
+        if not url:
+            return None
+        if "abcnews.com/video/" in url or "cbsnews.com/video/" in url:
+            return None
+        if self.url_has_unsafe_network_target(url):
+            self.log.warning(
+                "Rejected article URL with a local, private or unsafe target: "
+                f"{self.url_for_log(url)}"
+            )
             return None
         return url
 
-    @staticmethod
-    def image_source_is_usable(source):
+    @classmethod
+    def image_source_is_usable(cls, source):
         if not source:
             return False
         source = source.strip()
         lowered = source.lower()
-        if lowered.startswith(("data:", "blob:", "javascript:", "about:", "#")):
+        if lowered.startswith(("data:", "blob:", "javascript:", "about:", "file:", "#")):
+            return False
+        if cls.url_has_unsafe_network_target(source):
             return False
         rejected = ("1x1", "spacer", "transparent", "tracking", "pixel.gif", "clear.gif")
         return not any(value in lowered for value in rejected)
@@ -390,29 +463,30 @@ body > div:first-child > p:first-child {
             source = parts[0].strip() if parts else ""
             if not cls.image_source_is_usable(source):
                 continue
-            score = position + 1
+
+            score = (0, position + 1)
             if len(parts) == 2:
                 descriptor = parts[1].lower()
                 try:
                     if descriptor.endswith("w"):
-                        width = float(descriptor[:-1])
-                        score = 1000000 - width if width >= 1264 else width
+                        width = int(float(descriptor[:-1]))
+                        if width >= cls.source_image_target_width:
+                            score = (3, -width)
+                        else:
+                            score = (2, width)
                     elif descriptor.endswith("x"):
                         density = float(descriptor[:-1])
-                        score = min(density, 2.0) * 1000
+                        score = (1, min(density, 2.0))
                 except ValueError:
                     pass
             candidates.append((score, source))
-        return max(candidates, default=(0, ""))[1]
+        return max(candidates, default=((0, 0), ""))[1]
 
     @classmethod
     def normalise_images(cls, soup):
         for fallback in list(soup.find_all("noscript")):
-            try:
-                nested = BeautifulSoup(fallback.decode_contents())
-                image = nested.find("img")
-            except Exception:
-                image = None
+            nested = BeautifulSoup(fallback.decode_contents())
+            image = nested.find("img")
             if image is not None:
                 fallback.replaceWith(image)
 
@@ -458,7 +532,9 @@ body > div:first-child > p:first-child {
                     key=lambda tag: 1 if "avif" in (tag.get("type") or "").lower() else 0,
                 )
                 for source_tag in source_tags:
-                    candidate = cls.best_srcset_source(source_tag.get("data-srcset") or source_tag.get("srcset"))
+                    candidate = cls.best_srcset_source(
+                        source_tag.get("data-srcset") or source_tag.get("srcset")
+                    )
                     if candidate:
                         source = candidate
                         break
@@ -475,33 +551,57 @@ body > div:first-child > p:first-child {
             self.normalise_images(soup)
             return str(soup)
         except Exception:
+            self.log.exception(
+                "Raw HTML image normalisation failed for "
+                f"{self.url_for_log(url)}; continuing with unnormalised HTML"
+            )
             return raw_html
 
     def preprocess_html(self, soup):
         self.normalise_images(soup)
-        removable = ["script", "style", "noscript", "template", "iframe", "form", "button", "input", "canvas", "video", "audio", "object", "embed", "source", "svg"]
+        removable = [
+            "script", "style", "noscript", "template", "iframe", "form", "button", "input",
+            "canvas", "video", "audio", "object", "embed", "source", "svg",
+        ]
         for element in list(soup.find_all(removable)):
             element.extract()
-        allowed = {
-            "a": {"href", "title"},
-            "img": {"src", "alt", "title"},
-            "td": {"colspan", "rowspan"},
-            "th": {"colspan", "rowspan", "scope"},
+
+        global_allowed = {"id", "lang", "dir", "title"}
+        tag_allowed = {
+            "a": {"href"},
+            "img": {"src", "alt"},
+            "blockquote": {"cite"},
+            "q": {"cite"},
+            "td": {"colspan", "rowspan", "headers"},
+            "th": {"colspan", "rowspan", "headers", "scope"},
             "ol": {"start"},
+            "li": {"value"},
             "time": {"datetime"},
         }
         for element in soup.find_all(True):
-            retained = allowed.get(element.name, set())
+            retained = global_allowed | tag_allowed.get(element.name, set())
             for attribute in list(element.attrs):
                 if attribute not in retained:
                     del element[attribute]
+
+            if element.name == "a" and element.get("href"):
+                href = element.get("href").strip()
+                if href.lower().startswith(self.unsafe_link_schemes):
+                    del element["href"]
+
         return soup
 
     def postprocess_html(self, soup, first_fetch):
+        removed_remote = 0
         for image in list(soup.find_all("img")):
             source = (image.get("src") or "").strip().lower()
-            if not source or source.startswith(("http://", "https://", "//", "data:", "blob:")):
+            if not source or source.startswith(("http://", "https://", "//", "data:", "blob:", "file:")):
                 image.extract()
+                removed_remote += 1
+        if removed_remote:
+            self.log.warning(
+                f"Removed {removed_remote} image references that were still remote or unusable after download processing"
+            )
         return soup
 
     def populate_article_metadata(self, article, soup, first):
@@ -509,48 +609,3 @@ body > div:first-child > p:first-child {
             image = soup.find("img", src=True)
             if image is not None:
                 self.add_toc_thumbnail(article, image.get("src"))
-
-    @staticmethod
-    def element_classes(element):
-        value = element.get("class") or []
-        if isinstance(value, str):
-            return value.split()
-        return list(value)
-
-    def tidy_generated_pages(self, directory):
-        for root, directories, filenames in os.walk(directory):
-            directories.sort()
-            for filename in sorted(filenames):
-                if not filename.lower().endswith((".html", ".xhtml")):
-                    continue
-                path = os.path.join(root, filename)
-                try:
-                    with open(path, "rb") as source:
-                        soup = BeautifulSoup(source.read().decode("utf-8", "replace"))
-                    body = soup.find("body")
-                    if body is None:
-                        continue
-                    navbars = []
-                    for element in body.find_all(True):
-                        classes = self.element_classes(element)
-                        if "calibre_navbar" in classes or "touchscreen_navbar" in classes:
-                            navbars.append(element)
-                    if navbars:
-                        primary = navbars[0]
-                        for duplicate in navbars[1:]:
-                            duplicate.extract()
-                        primary.extract()
-                        body.insert(0, primary)
-                    if os.path.abspath(path) == os.path.abspath(os.path.join(directory, "index.html")):
-                        for paragraph in list(body.find_all(["p", "h3"])):
-                            if not self.tag_to_string(paragraph, use_alt=False).strip() and paragraph.find("img") is None:
-                                paragraph.extract()
-                    with open(path, "wb") as destination:
-                        destination.write(str(soup).encode("utf-8"))
-                except Exception:
-                    self.log.exception(f"Failed to tidy generated page: {path}")
-
-    def create_opf(self, feeds, dir=None):
-        directory = dir or self.output_dir
-        super().create_opf(feeds, dir)
-        self.tidy_generated_pages(directory)
