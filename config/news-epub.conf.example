@@ -2,9 +2,9 @@
 # they default to work/ and outbox/ beneath NEWS_EPUB_ROOT.
 NEWS_EPUB_ROOT=/var/lib/news-epub
 NEWS_EPUB_RECIPE=/opt/news-epub/news-epub.recipe
-# The canonical validator warns (without failing publication) when a recognised
-# safe raster payload has a mismatched raster declaration, while unrecognised
-# image bytes, active content and remote resources remain hard failures.
+# The build asks the canonical validator to repair recognised safe raster
+# media-type mismatches in the staged EPUB manifest, then validates the
+# rewritten EPUB again. Unrecognised image bytes remain hard failures.
 NEWS_EPUB_VALIDATOR=/usr/local/bin/news-epub-validate
 NEWS_EPUB_EBOOK_CONVERT=ebook-convert
 NEWS_EPUB_EPUBCHECK=
