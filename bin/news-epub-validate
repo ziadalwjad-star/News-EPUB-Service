@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import posixpath
 import re
 import stat
 import sys
+import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -222,12 +224,16 @@ def detect_raster_media_type(data: bytes) -> str | None:
     return None
 
 
-def validate_image_signature(archive: zipfile.ZipFile, item: ManifestItem) -> bool:
+def validate_image_signature(
+    archive: zipfile.ZipFile,
+    item: ManifestItem,
+    *,
+    report_warning: bool = True,
+) -> bool:
     """Validate common raster signatures.
 
-    Returns True when a recognised safe raster payload is accepted despite a
-    mismatched declared raster media type. This is reported as a warning, not
-    silently ignored. Unrecognised bytes remain a hard validation failure.
+    Returns True when a recognised safe raster payload differs from its
+    declared raster media type. Unrecognised bytes remain a hard failure.
     """
     checked_media_types = {"image/gif", "image/jpeg", "image/png", "image/webp"}
     if item.media_type == "image/svg+xml" or item.media_type not in checked_media_types:
@@ -244,15 +250,92 @@ def validate_image_signature(archive: zipfile.ZipFile, item: ManifestItem) -> bo
         )
 
     if detected != item.media_type:
-        print(
-            "news-epub-validate: warning: raster media-type mismatch accepted because "
-            f"the payload has a recognised safe raster signature: declared={item.media_type} "
-            f"detected={detected} path={item.path}",
-            file=sys.stderr,
-        )
+        if report_warning:
+            print(
+                "news-epub-validate: warning: raster media-type mismatch detected: "
+                f"declared={item.media_type} detected={detected} path={item.path}",
+                file=sys.stderr,
+            )
         return True
 
     return False
+
+
+def repair_raster_media_types(path: str) -> int:
+    """Repair safe raster media-type mismatches in the OPF manifest in place.
+
+    The caller must fully validate the EPUB before invoking this function. The
+    archive is rewritten beside the candidate and atomically replaced, then the
+    caller validates the rewritten EPUB again before publication.
+    """
+    checked_media_types = {"image/gif", "image/jpeg", "image/png", "image/webp"}
+
+    with zipfile.ZipFile(path) as archive:
+        container = safe_xml(archive.read("META-INF/container.xml"), "META-INF/container.xml")
+        rootfiles = [e for e in container.iter() if local_name(e.tag) == "rootfile"]
+        if len(rootfiles) != 1:
+            raise ValidationError("cannot repair raster media types without exactly one package rootfile")
+        opf_path = rootfiles[0].attrib.get("full-path", "").strip()
+        if not opf_path:
+            raise ValidationError("cannot repair raster media types because the package path is empty")
+
+        package = safe_xml(archive.read(opf_path), opf_path)
+        opf_dir = posixpath.dirname(opf_path)
+        repairs: list[tuple[str, str, str]] = []
+
+        for element in package.iter():
+            if local_name(element.tag) != "item":
+                continue
+            declared = element.attrib.get("media-type", "").strip().lower()
+            if declared not in checked_media_types:
+                continue
+            href = element.attrib.get("href", "").strip()
+            if not href:
+                continue
+            item_path = normalise_archive_path(opf_dir, href)
+            with archive.open(item_path) as stream:
+                detected = detect_raster_media_type(stream.read(32))
+            if detected is not None and detected != declared:
+                element.set("media-type", detected)
+                repairs.append((item_path, declared, detected))
+
+        if not repairs:
+            return 0
+
+        ET.register_namespace("", "http://www.idpf.org/2007/opf")
+        ET.register_namespace("dc", "http://purl.org/dc/elements/1.1/")
+        repaired_package = ET.tostring(package, encoding="utf-8", xml_declaration=True)
+        infos = archive.infolist()
+        payloads = {
+            info.filename: (repaired_package if info.filename == opf_path else archive.read(info.filename))
+            for info in infos
+            if not info.is_dir()
+        }
+
+    original_mode = stat.S_IMODE(os.stat(path).st_mode)
+    parent = os.path.dirname(os.path.abspath(path)) or "."
+    fd, temporary = tempfile.mkstemp(prefix=".news-epub-raster-repair.", suffix=".epub", dir=parent)
+    os.close(fd)
+    try:
+        with zipfile.ZipFile(temporary, "w") as repaired:
+            for info in infos:
+                data = b"" if info.is_dir() else payloads[info.filename]
+                repaired.writestr(info, data)
+        os.chmod(temporary, original_mode)
+        with open(temporary, "rb") as stream:
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+    for item_path, declared, detected in repairs:
+        print(
+            "news-epub-validate: repair: corrected raster media type in package manifest: "
+            f"declared={declared} detected={detected} path={item_path}",
+            file=sys.stderr,
+        )
+    return len(repairs)
 
 
 def audit_document(root: ET.Element, path: str) -> tuple[set[str], list[tuple[str, str]]]:
@@ -333,6 +416,7 @@ def validate_epub(
     require_epub3: bool,
     max_uncompressed_bytes: int,
     max_member_bytes: int,
+    report_raster_warnings: bool = True,
 ) -> dict[str, int | str]:
     if not zipfile.is_zipfile(path):
         raise ValidationError("file is not a readable ZIP/EPUB container")
@@ -496,7 +580,7 @@ def validate_epub(
 
         raster_media_type_warnings = 0
         for item in image_items:
-            if validate_image_signature(archive, item):
+            if validate_image_signature(archive, item, report_warning=report_raster_warnings):
                 raster_media_type_warnings += 1
 
         return {
@@ -530,6 +614,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="MIB",
         help=f"maximum uncompressed size of one archive member (default: {DEFAULT_MAX_MEMBER_MIB} MiB)",
     )
+    parser.add_argument(
+        "--repair-raster-media-types",
+        action="store_true",
+        help="repair recognised GIF/JPEG/PNG/WebP manifest media-type mismatches, then re-validate",
+    )
     parser.add_argument("--json", action="store_true", help="emit validation metrics as JSON")
     return parser
 
@@ -546,7 +635,18 @@ def main() -> int:
             require_epub3=args.require_epub3,
             max_uncompressed_bytes=mib_to_bytes(args.max_uncompressed_mib),
             max_member_bytes=mib_to_bytes(args.max_member_mib),
+            report_raster_warnings=not args.repair_raster_media_types,
         )
+        repairs = 0
+        if args.repair_raster_media_types and metrics["raster_media_type_warnings"]:
+            repairs = repair_raster_media_types(args.epub)
+            metrics = validate_epub(
+                args.epub,
+                require_epub3=args.require_epub3,
+                max_uncompressed_bytes=mib_to_bytes(args.max_uncompressed_mib),
+                max_member_bytes=mib_to_bytes(args.max_member_mib),
+            )
+        metrics["raster_media_type_repairs"] = repairs
     except (OSError, RuntimeError, zipfile.BadZipFile, ValidationError) as exc:
         print(f"news-epub-validate: error: {exc}", file=sys.stderr)
         return EX_DATAERR
@@ -560,6 +660,7 @@ def main() -> int:
             f"spine_items={metrics['spine_items']} xhtml_items={metrics['xhtml_items']} "
             f"image_items={metrics['image_items']} "
             f"raster_media_type_warnings={metrics['raster_media_type_warnings']} "
+            f"raster_media_type_repairs={metrics['raster_media_type_repairs']} "
             f"uncompressed_bytes={metrics['uncompressed_bytes']}"
         )
     return 0
