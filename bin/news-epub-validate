@@ -210,22 +210,49 @@ def validate_nav_document(root: ET.Element, path: str) -> None:
         raise ValidationError(f"navigation document must contain exactly one epub:type='toc' nav: {path}")
 
 
-def validate_image_signature(archive: zipfile.ZipFile, item: ManifestItem) -> None:
-    if item.media_type == "image/svg+xml":
-        return
-    signatures = {
-        "image/gif": lambda data: data.startswith((b"GIF87a", b"GIF89a")),
-        "image/jpeg": lambda data: data.startswith(b"\xff\xd8\xff"),
-        "image/png": lambda data: data.startswith(b"\x89PNG\r\n\x1a\n"),
-        "image/webp": lambda data: len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP",
-    }
-    checker = signatures.get(item.media_type)
-    if checker is None:
-        return
+def detect_raster_media_type(data: bytes) -> str | None:
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def validate_image_signature(archive: zipfile.ZipFile, item: ManifestItem) -> bool:
+    """Validate common raster signatures.
+
+    Returns True when a recognised safe raster payload is accepted despite a
+    mismatched declared raster media type. This is reported as a warning, not
+    silently ignored. Unrecognised bytes remain a hard validation failure.
+    """
+    checked_media_types = {"image/gif", "image/jpeg", "image/png", "image/webp"}
+    if item.media_type == "image/svg+xml" or item.media_type not in checked_media_types:
+        return False
+
     with archive.open(item.path) as stream:
-        prefix = stream.read(16)
-    if not checker(prefix):
-        raise ValidationError(f"image bytes do not match declared media type {item.media_type}: {item.path}")
+        prefix = stream.read(32)
+
+    detected = detect_raster_media_type(prefix)
+    if detected is None:
+        raise ValidationError(
+            "image bytes do not match declared media type "
+            f"{item.media_type}; payload is not a recognised safe raster format: {item.path}"
+        )
+
+    if detected != item.media_type:
+        print(
+            "news-epub-validate: warning: raster media-type mismatch accepted because "
+            f"the payload has a recognised safe raster signature: declared={item.media_type} "
+            f"detected={detected} path={item.path}",
+            file=sys.stderr,
+        )
+        return True
+
+    return False
 
 
 def audit_document(root: ET.Element, path: str) -> tuple[set[str], list[tuple[str, str]]]:
@@ -467,8 +494,10 @@ def validate_epub(
             text = data.decode("utf-8", "replace")
             validate_css(text, source_path=item.path, manifest_paths=manifest_paths)
 
+        raster_media_type_warnings = 0
         for item in image_items:
-            validate_image_signature(archive, item)
+            if validate_image_signature(archive, item):
+                raster_media_type_warnings += 1
 
         return {
             "version": version,
@@ -476,6 +505,7 @@ def validate_epub(
             "spine_items": len(spine_ids),
             "xhtml_items": len(xhtml_items),
             "image_items": len(image_items),
+            "raster_media_type_warnings": raster_media_type_warnings,
             "uncompressed_bytes": total_uncompressed,
         }
 
@@ -528,7 +558,9 @@ def main() -> int:
             "news-epub-validate: ok: "
             f"version={metrics['version']} manifest_items={metrics['manifest_items']} "
             f"spine_items={metrics['spine_items']} xhtml_items={metrics['xhtml_items']} "
-            f"image_items={metrics['image_items']} uncompressed_bytes={metrics['uncompressed_bytes']}"
+            f"image_items={metrics['image_items']} "
+            f"raster_media_type_warnings={metrics['raster_media_type_warnings']} "
+            f"uncompressed_bytes={metrics['uncompressed_bytes']}"
         )
     return 0
 
