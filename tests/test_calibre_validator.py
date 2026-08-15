@@ -7,10 +7,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from test_epub_validator import build_epub
+try:
+    from tests.test_epub_validator import build_epub
+except ModuleNotFoundError:
+    from test_epub_validator import build_epub
 
 ROOT = Path(__file__).resolve().parents[1]
-VALIDATOR = ROOT / "bin" / "news-epub-validate-calibre"
+VALIDATOR = ROOT / "bin" / "news-epub-validate"
 
 
 class CalibreValidatorCompatibilityTests(unittest.TestCase):
@@ -32,8 +35,10 @@ class CalibreValidatorCompatibilityTests(unittest.TestCase):
             )
             result = self.run_validator(path)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("Calibre raster media-type mismatch tolerated", result.stderr)
-            self.assertEqual(json.loads(result.stdout)["image_items"], 1)
+            self.assertIn("raster media-type mismatch accepted", result.stderr)
+            metrics = json.loads(result.stdout)
+            self.assertEqual(metrics["image_items"], 1)
+            self.assertEqual(metrics["raster_media_type_warnings"], 1)
 
     def test_still_rejects_unrecognised_image_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
