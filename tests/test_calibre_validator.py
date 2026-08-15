@@ -5,6 +5,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 try:
@@ -19,7 +20,13 @@ VALIDATOR = ROOT / "bin" / "news-epub-validate"
 class CalibreValidatorCompatibilityTests(unittest.TestCase):
     def run_validator(self, path: Path) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [os.fspath(VALIDATOR), "--require-epub3", "--json", os.fspath(path)],
+            [
+                os.fspath(VALIDATOR),
+                "--require-epub3",
+                "--repair-raster-media-types",
+                "--json",
+                os.fspath(path),
+            ],
             text=True,
             capture_output=True,
             check=False,
@@ -35,10 +42,14 @@ class CalibreValidatorCompatibilityTests(unittest.TestCase):
             )
             result = self.run_validator(path)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("raster media-type mismatch accepted", result.stderr)
+            self.assertIn("corrected raster media type in package manifest", result.stderr)
             metrics = json.loads(result.stdout)
             self.assertEqual(metrics["image_items"], 1)
-            self.assertEqual(metrics["raster_media_type_warnings"], 1)
+            self.assertEqual(metrics["raster_media_type_warnings"], 0)
+            self.assertEqual(metrics["raster_media_type_repairs"], 1)
+            with zipfile.ZipFile(path) as archive:
+                package = archive.read("EPUB/package.opf").decode("utf-8")
+            self.assertIn('media-type="image/jpeg"', package)
 
     def test_still_rejects_unrecognised_image_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
