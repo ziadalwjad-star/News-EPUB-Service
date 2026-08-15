@@ -50,6 +50,12 @@ class BasicNewsRecipe:
     def add_toc_thumbnail(self, article, src):
         article.thumbnail = src
 
+    def extract_readable_article(self, html, url):
+        return html
+
+    def cleanup(self):
+        return None
+
 
 def install_calibre_stubs() -> None:
     calibre = types.ModuleType("calibre")
@@ -123,6 +129,9 @@ class RecipeTests(unittest.TestCase):
 
     def test_image_source_rejects_explicit_private_network_target(self):
         self.assertFalse(self.recipe_class.image_source_is_usable("http://192.168.1.2/image.jpg"))
+        self.assertFalse(self.recipe_class.image_source_is_usable("ftp://example.org/image.jpg"))
+        self.assertTrue(self.recipe_class.image_source_is_usable("https://example.org/image.jpg"))
+        self.assertTrue(self.recipe_class.image_source_is_usable("/images/photo.jpg"))
 
     def test_image_normalisation_uses_lazy_source_and_removes_tracking_pixel(self):
         soup = Bs4BeautifulSoup(
@@ -134,6 +143,74 @@ class RecipeTests(unittest.TestCase):
         images = soup.find_all("img")
         self.assertEqual(len(images), 1)
         self.assertEqual(images[0]["src"], "https://example.org/photo.jpg")
+
+    def test_auto_cleanup_preserves_article_images(self):
+        keep = self.recipe_class.auto_cleanup_keep
+        self.assertIn("//article//img", keep)
+        self.assertIn("//main//img", keep)
+        self.assertIn("//*[@role='main']//img", keep)
+
+    def test_fallback_hero_uses_open_graph_image_when_extracted_article_is_image_less(self):
+        source = Bs4BeautifulSoup(
+            '<html><head>'
+            '<meta property="og:image" content="https://cdn.example.org/hero.jpg"/>'
+            '<meta property="og:image:alt" content="Lead photograph"/>'
+            '</head><body><article><p>Text</p></article></body></html>',
+            "html.parser",
+        )
+        extracted = '<html><body><h2>Story</h2><p>Text</p></body></html>'
+        rendered, injected, origin = self.recipe_class.inject_fallback_hero(extracted, str(source))
+        soup = Bs4BeautifulSoup(rendered, "html.parser")
+        self.assertTrue(injected)
+        self.assertEqual(origin, "meta:og:image")
+        self.assertEqual(soup.find("img")["src"], "https://cdn.example.org/hero.jpg")
+        self.assertEqual(soup.find("img")["alt"], "Lead photograph")
+
+    def test_fallback_hero_does_not_duplicate_existing_extracted_image(self):
+        source = (
+            '<html><head><meta property="og:image" content="https://cdn.example.org/hero.jpg"/></head>'
+            '<body><article><p>Text</p></article></body></html>'
+        )
+        extracted = '<html><body><h2>Story</h2><img src="images/local.jpg"/><p>Text</p></body></html>'
+        rendered, injected, origin = self.recipe_class.inject_fallback_hero(extracted, source)
+        soup = Bs4BeautifulSoup(rendered, "html.parser")
+        self.assertFalse(injected)
+        self.assertEqual(origin, "")
+        self.assertEqual([img["src"] for img in soup.find_all("img")], ["images/local.jpg"])
+
+    def test_fallback_hero_uses_json_ld_image(self):
+        source = (
+            '<html><head><script type="application/ld+json">'
+            '{"@type":"NewsArticle","image":{"url":"https://cdn.example.org/json-hero.jpg"}}'
+            '</script></head><body><article><p>Text</p></article></body></html>'
+        )
+        extracted = '<html><body><p>Text</p></body></html>'
+        rendered, injected, origin = self.recipe_class.inject_fallback_hero(extracted, source)
+        soup = Bs4BeautifulSoup(rendered, "html.parser")
+        self.assertTrue(injected)
+        self.assertEqual(origin, "json-ld:image")
+        self.assertEqual(soup.find("img")["src"], "https://cdn.example.org/json-hero.jpg")
+
+    def test_fallback_hero_rejects_logo_like_metadata(self):
+        source = (
+            '<html><head><meta property="og:image" content="https://cdn.example.org/site-logo.png"/></head>'
+            '<body><article><p>Text</p></article></body></html>'
+        )
+        extracted = '<html><body><p>Text</p></body></html>'
+        _rendered, injected, origin = self.recipe_class.inject_fallback_hero(extracted, source)
+        self.assertFalse(injected)
+        self.assertEqual(origin, "")
+
+    def test_cleanup_logs_article_image_coverage(self):
+        recipe, log = self.make_recipe()
+        recipe.postprocess_html(Bs4BeautifulSoup('<article><img src="images/a.jpg"/></article>', "html.parser"), True)
+        recipe.postprocess_html(Bs4BeautifulSoup('<article><p>No image</p></article>', "html.parser"), True)
+        recipe._fallback_hero_injections = 1
+        recipe.cleanup()
+        messages = log.infos + log.warnings
+        self.assertEqual(len(messages), 1)
+        self.assertIn("Article image coverage after download: 1/2 (50.0%)", messages[0])
+        self.assertIn("hero fallbacks injected=1", messages[0])
 
     def test_semantic_attributes_survive_source_cleanup(self):
         recipe, _log = self.make_recipe()
