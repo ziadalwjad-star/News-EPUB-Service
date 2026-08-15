@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -58,7 +59,7 @@ def build_epub(path: Path, *, article_extra: str = "", css: str = "p { margin: 0
 class ValidatorTests(unittest.TestCase):
     def run_validator(self, epub: Path) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [os.fspath(VALIDATOR), "--require-epub3", os.fspath(epub)],
+            [sys.executable, os.fspath(VALIDATOR), "--require-epub3", os.fspath(epub)],
             text=True,
             capture_output=True,
             check=False,
