@@ -3,6 +3,7 @@ set -eu
 
 root="${NEWS_EPUB_ROOT:-/var/lib/news-epub}"
 recipe="${NEWS_EPUB_RECIPE:-/opt/news-epub/news-epub.recipe}"
+validator="${NEWS_EPUB_VALIDATOR:-/usr/local/bin/news-epub-validate}"
 outbox="$root/outbox"
 work="$root/work"
 retention_days="${NEWS_EPUB_RETENTION_DAYS:-7}"
@@ -11,7 +12,22 @@ retry_delay="${NEWS_EPUB_RETRY_DELAY:-600}"
 lock_wait="${NEWS_EPUB_LOCK_WAIT:-300}"
 lock="${NEWS_EPUB_LOCK:-$work/.build.lock}"
 output_profile="${NEWS_EPUB_OUTPUT_PROFILE:-}"
+epub_version="${NEWS_EPUB_EPUB_VERSION:-3}"
+require_epubcheck="${NEWS_EPUB_REQUIRE_EPUBCHECK:-0}"
+epubcheck_command="${NEWS_EPUB_EPUBCHECK:-}"
+umask_value="${NEWS_EPUB_UMASK:-0027}"
 edition_key="${1:-auto}"
+
+log() {
+    printf '%s %s\n' "$(date -Is)" "$*"
+}
+
+fail() {
+    code="$1"
+    shift
+    printf '%s ERROR: %s\n' "$(date -Is)" "$*" >&2
+    exit "$code"
+}
 
 case "$edition_key" in
     morning|Morning) edition="Morning" ;;
@@ -27,67 +43,94 @@ case "$edition_key" in
             edition="Night"
         fi
         ;;
-    *)
-        printf 'Unknown edition: %s\n' "$edition_key" >&2
-        exit 64
-        ;;
+    *) fail 64 "Unknown edition: $edition_key" ;;
 esac
 
 case "$retention_days:$max_attempts:$retry_delay:$lock_wait" in
-    *[!0-9:]*|:*|*::*|*:) 
-        printf 'Invalid numeric configuration.\n' >&2
-        exit 64
-        ;;
+    *[!0-9:]*|:*|*::*|*:) fail 64 "Invalid numeric configuration" ;;
+esac
+[ "$max_attempts" -gt 0 ] || fail 64 "NEWS_EPUB_MAX_ATTEMPTS must be greater than zero"
+case "$epub_version" in 2|3) ;; *) fail 64 "NEWS_EPUB_EPUB_VERSION must be 2 or 3" ;; esac
+case "$require_epubcheck" in 0|1) ;; *) fail 64 "NEWS_EPUB_REQUIRE_EPUBCHECK must be 0 or 1" ;; esac
+case "$umask_value" in
+    0[0-7][0-7][0-7]|[0-7][0-7][0-7]) ;;
+    *) fail 64 "NEWS_EPUB_UMASK must be a three- or four-digit octal mask" ;;
 esac
 
-[ "$max_attempts" -gt 0 ] || {
-    printf 'NEWS_EPUB_MAX_ATTEMPTS must be greater than zero.\n' >&2
-    exit 64
-}
+[ -r "$recipe" ] || fail 66 "Recipe not readable: $recipe"
+command -v ebook-convert >/dev/null 2>&1 || fail 69 "ebook-convert is not installed or not on PATH"
+command -v flock >/dev/null 2>&1 || fail 69 "flock is not installed or not on PATH"
+[ -x "$validator" ] || fail 69 "EPUB validator is not executable: $validator"
 
-[ -r "$recipe" ] || {
-    printf 'Recipe not readable: %s\n' "$recipe" >&2
-    exit 66
-}
+if [ -n "$epubcheck_command" ]; then
+    command -v "$epubcheck_command" >/dev/null 2>&1 || fail 69 "Configured EPUBCheck command is unavailable: $epubcheck_command"
+elif command -v epubcheck >/dev/null 2>&1; then
+    epubcheck_command="$(command -v epubcheck)"
+elif [ "$require_epubcheck" -eq 1 ]; then
+    fail 69 "EPUBCheck is required but no epubcheck command is available"
+fi
 
-issue="$(LC_ALL=C date '+%A %d %B %Y')"
-temporary="$work/.News EPUB - $issue - $edition.building.epub"
-destination="$outbox/News EPUB - $issue - $edition.epub"
+umask "$umask_value"
+mkdir -p "$outbox" "$work" "$work/tmp"
+[ "$(stat -c '%d' "$work")" = "$(stat -c '%d' "$outbox")" ] || \
+    fail 73 "Work and outbox must be on the same filesystem for atomic publication"
 
-umask 0002
-mkdir -p "$outbox" "$work/tmp"
 TMPDIR="$work/tmp"
 NEWS_EPUB_EDITION="$edition"
 export TMPDIR NEWS_EPUB_EDITION
 
 exec 9>"$lock"
 if ! flock -w "$lock_wait" 9; then
-    printf 'Another build still holds the service lock; %s edition not started.\n' "$edition" >&2
-    exit 75
+    fail 75 "Another build still holds the service lock; $edition edition not started"
 fi
+
+run_dir="$(mktemp -d "$work/run.XXXXXX")"
+cleanup() {
+    rm -rf -- "$run_dir"
+}
+trap cleanup EXIT HUP INT TERM
+
+issue="$(LC_ALL=C date '+%A %d %B %Y')"
+temporary="$run_dir/News EPUB - $issue - $edition.epub"
+destination="$outbox/News EPUB - $issue - $edition.epub"
 
 attempt=1
 status=1
 while [ "$attempt" -le "$max_attempts" ]; do
-    printf 'News EPUB %s edition: attempt %s of %s\n' "$edition" "$attempt" "$max_attempts"
-    rm -f "$temporary"
+    log "News EPUB $edition edition: attempt $attempt of $max_attempts"
+    rm -f -- "$temporary"
+    status=0
 
+    set -- "$recipe" "$temporary" --epub-version "$epub_version"
     if [ -n "$output_profile" ]; then
-        ebook-convert "$recipe" "$temporary" --output-profile "$output_profile" && status=0 || status=$?
-    else
-        ebook-convert "$recipe" "$temporary" && status=0 || status=$?
+        set -- "$@" --output-profile "$output_profile"
+    fi
+    ebook-convert "$@" || status=$?
+
+    if [ "$status" -eq 0 ] && [ -s "$temporary" ]; then
+        if [ "$epub_version" -eq 3 ]; then
+            "$validator" --require-epub3 "$temporary" || status=$?
+        else
+            "$validator" "$temporary" || status=$?
+        fi
+    elif [ "$status" -eq 0 ]; then
+        status=65
+        log "Generated EPUB is empty"
     fi
 
-    if [ "$status" -eq 0 ] && test -s "$temporary" && unzip -tqq "$temporary"; then
-        image_count="$(unzip -Z1 "$temporary" | awk 'BEGIN { count = 0 } { name = tolower($0); if (name ~ /\.(jpg|jpeg|png|gif|webp|svg)$/) count++ } END { print count }')"
-        printf 'Validated EPUB contains %s embedded image files.\n' "$image_count"
-        mv -f "$temporary" "$destination"
+    if [ "$status" -eq 0 ] && [ -n "$epubcheck_command" ]; then
+        "$epubcheck_command" "$temporary" || status=$?
+    fi
+
+    if [ "$status" -eq 0 ]; then
+        mv -f -- "$temporary" "$destination"
         find "$outbox" -maxdepth 1 -type f -name 'News EPUB - *.epub' -mtime "+$retention_days" -delete
+        log "Published validated EPUB: $destination"
         exit 0
     fi
 
-    [ "$status" -ne 0 ] || status=65
-    rm -f "$temporary"
+    log "Build attempt $attempt failed with status $status"
+    rm -f -- "$temporary"
     if [ "$attempt" -lt "$max_attempts" ]; then
         sleep "$retry_delay"
     fi
