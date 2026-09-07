@@ -45,6 +45,19 @@ In normal use, the service is installed once and runs automatically. The persist
 
 Approved EPUBs are placed in the current-day outbox for local use or automatic synchronisation. Previous editions are moved to the separate archive, and Syncthing delivery can be checked independently so successful EPUB creation is not mistaken for successful delivery to the receiving e-reader.
 
+Please use the releases tab for the latest version.
+
+# v1.1.1
+
+Focused production-alignment and CBS content-quality fix.
+
+Changes
+
+* Fixed CBS News Politics related-story modules leaking non-editorial thumbnails into article endings.
+* Added a narrow cbsnews.com cleanup rule targeting li elements whose IDs begin with inline-recirc-item--.
+* Fixed the two reproducible trailing_image_clusters audit failures without weakening validation.
+* Prevented CBS recommendation thumbnails from leaking across neighbouring article image paths.
+* Preserved legitimate CBS article text and editorial images while removing only the proven recirculation module.
 
 # v1.1
 
