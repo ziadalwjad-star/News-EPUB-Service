@@ -45,7 +45,7 @@ In normal use, the service is installed once and runs automatically. The persist
 
 Approved EPUBs are placed in the current-day outbox for local use or automatic synchronisation. Previous editions are moved to the separate archive, and Syncthing delivery can be checked independently so successful EPUB creation is not mistaken for successful delivery to the receiving e-reader.
 
-Please use the releases tab for the latest version.
+Please use the Releases tab for the latest packaged version.
 
 # v1.1.1
 
